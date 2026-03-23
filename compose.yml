@@ -1,0 +1,30 @@
+services:
+  postgres:
+    container_name: postgres_container
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: athlete
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: sports_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+ 
+  pgadmin:
+    container_name: pgadmin_container
+    image: dpage/pgadmin4
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8081:80"
+    depends_on:
+      - postgres
+ 
+volumes:
+  postgres_data:
+ 
+ 

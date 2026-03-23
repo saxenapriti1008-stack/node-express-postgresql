@@ -1,154 +1,126 @@
 import express from "express";
-import pool from "./db.js";
+import pg from "pg";
 import dotenv from "dotenv";
 import { z } from "zod";
 
 dotenv.config();
 
 const app = express();
+const PORT = 3000;
+const { Pool } = pg;
+
+const pool = new Pool({
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_DATABASE,
+  password: process.env.DB_PASSWORD,
+});
+
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
-
 /* -------------------------
-PING
+ZOD SCHEMA (for athletes)
 ------------------------- */
-app.get("/ping", (req, res) => {
-  res.json({ message: "pong" });
+const athleteSchema = z.object({
+  name: z.string().min(2).max(50),
+  sport: z.string().min(2).max(50),
+  age: z.number().min(10).max(100),
 });
 
 /* -------------------------
-1. PLAYERS + SCORES
+GET ALL ATHLETES
 ------------------------- */
-app.get("/players-scores", async (req, res) => {
+app.get("/", async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT p.name, g.title, s.score
-      FROM scores s
-      JOIN players p ON s.player_id = p.id
-      JOIN video_games g ON s.game_id = g.id;
-    `);
-
-    res.json(result.rows);
+    const result = await pool.query("SELECT * FROM athletes");
+    res.status(200).json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).send(err.message);
   }
 });
 
 /* -------------------------
-2. TOP PLAYERS
+CREATE ATHLETE (ZOD ADDED)
 ------------------------- */
-app.get("/top-players", async (req, res) => {
+app.post("/athletes", async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT p.name, SUM(s.score) AS total_score
-      FROM scores s
-      JOIN players p ON s.player_id = p.id
-      GROUP BY p.name
-      ORDER BY total_score DESC
-      LIMIT 3;
-    `);
-
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* -------------------------
-3. INACTIVE PLAYERS
-------------------------- */
-app.get("/inactive-players", async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT p.name
-      FROM players p
-      LEFT JOIN scores s ON p.id = s.player_id
-      WHERE s.id IS NULL;
-    `);
-
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* -------------------------
-4. POPULAR GENRES
-------------------------- */
-app.get("/popular-genres", async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT g.genre, COUNT(*) AS total_plays
-      FROM scores s
-      JOIN video_games g ON s.game_id = g.id
-      GROUP BY g.genre
-      ORDER BY total_plays DESC;
-    `);
-
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* -------------------------
-5. RECENT PLAYERS
-------------------------- */
-app.get("/recent-players", async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT *
-      FROM players
-      WHERE join_date >= CURRENT_DATE - INTERVAL '30 days';
-    `);
-
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* -------------------------
-BONUS: FAVORITE GAMES
-------------------------- */
-app.get("/favorite-games", async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT p.name, g.title, COUNT(*) AS times_played
-      FROM scores s
-      JOIN players p ON s.player_id = p.id
-      JOIN video_games g ON s.game_id = g.id
-      GROUP BY p.name, g.title
-      ORDER BY times_played DESC;
-    `);
-
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* -------------------------
-ZOD VALIDATION EXAMPLE
-------------------------- */
-const playerSchema = z.object({
-  name: z.string().min(2),
-  join_date: z.string()
-});
-
-app.post("/players", async (req, res) => {
-  try {
-    const data = playerSchema.parse(req.body);
+    // ✅ Zod validation
+    const validatedData = athleteSchema.parse(req.body);
 
     const result = await pool.query(
-      "INSERT INTO players (name, join_date) VALUES ($1, $2) RETURNING *",
-      [data.name, data.join_date]
+      "INSERT INTO athletes (name, sport, age) VALUES ($1, $2, $3) RETURNING *",
+      [validatedData.name, validatedData.sport, validatedData.age]
     );
 
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    res.status(400).json({ error: err.errors || err.message });
+    // ✅ Zod error handling
+    if (err.name === "ZodError") {
+      return res.status(400).json({
+        message: "Validation failed",
+        errors: err.errors,
+      });
+    }
+
+    res.status(500).send(err.message);
+  }
+});
+
+/* -------------------------
+UPDATE ATHLETE
+------------------------- */
+app.put("/athletes/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const validatedData = athleteSchema.parse(req.body);
+
+    const result = await pool.query(
+      "UPDATE athletes SET name=$1, sport=$2, age=$3 WHERE id=$4 RETURNING *",
+      [
+        validatedData.name,
+        validatedData.sport,
+        validatedData.age,
+        id,
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).send("Athlete not found");
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    if (err.name === "ZodError") {
+      return res.status(400).json({
+        message: "Validation failed",
+        errors: err.errors,
+      });
+    }
+
+    res.status(500).send(err.message);
+  }
+});
+
+/* -------------------------
+DELETE ATHLETE
+------------------------- */
+app.delete("/athletes/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      "DELETE FROM athletes WHERE id=$1 RETURNING *",
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).send("Athlete not found");
+    }
+
+    res.json({ message: "Athlete deleted successfully" });
+  } catch (err) {
+    res.status(500).send(err.message);
   }
 });
 
@@ -156,5 +128,5 @@ app.post("/players", async (req, res) => {
 START SERVER
 ------------------------- */
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server is running on http://localhost:${PORT}`);
 });
